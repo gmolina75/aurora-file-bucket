@@ -1,0 +1,519 @@
+openapi: 3.1.0
+info:
+  title: Aurora File Bucket API
+  version: 1.0.0
+  description: |
+    Control plane and chunked streaming API for 100 GB transfers to ASP.NET/IIS.
+
+    Normative behaviour lives in `docs/PROTOCOL.md`. This document is the machine
+    readable view of the same contract: shapes, status codes and headers.
+  license:
+    name: MIT
+    url: https://github.com/gmolina75/aurora-file-bucket/blob/main/LICENSE
+servers:
+  - url: https://{host}/v1
+    variables:
+      host:
+        default: localhost
+        description: Windows Server host running IIS + ASP.NET Core.
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: auth
+    description: Rotatable token lifecycle.
+  - name: uploads
+    description: Resumable chunked upload lifecycle.
+
+paths:
+  /auth/login:
+    post:
+      tags: [auth]
+      summary: Issue an access/refresh token pair
+      description: |
+        v0.1 validates against the locally configured users. v0.2 replaces this
+        endpoint with the Google OIDC callback; the response shape is unchanged.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Token pair issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenPair'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /auth/refresh:
+    post:
+      tags: [auth]
+      summary: Rotate access and refresh tokens mid-transfer
+      description: |
+        Single use refresh tokens. Presenting an already revoked token revokes
+        every refresh token belonging to that user.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken:
+                  type: string
+                  description: Opaque single-use refresh token (base64url).
+      responses:
+        '200':
+          description: New short-lived JWT and rotated refresh token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenPair'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /uploads/init:
+    post:
+      tags: [uploads]
+      summary: Initialize upload session and register chunk manifest
+      parameters:
+        - $ref: '#/components/parameters/VaultSlug'
+        - $ref: '#/components/parameters/ClientId'
+        - $ref: '#/components/parameters/ClientPlatform'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InitRequest'
+      responses:
+        '201':
+          description: Session created with uploadId and vault assignment
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadSession'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '413':
+          $ref: '#/components/responses/QuotaExceeded'
+        '429':
+          $ref: '#/components/responses/Backpressure'
+
+  /uploads/{id}/parts/{n}:
+    put:
+      tags: [uploads]
+      summary: Stream a single compressed or raw chunk with SHA-256 verification
+      description: |
+        The body is the chunk exactly as transferred (compressed when
+        `X-Compression: zstd`). `X-Chunk-Sha256` is the SHA-256 of the received
+        body; `X-Raw-Sha256` is the SHA-256 of the uncompressed chunk.
+        Re-sending the same part with the same hash is idempotent.
+      parameters:
+        - $ref: '#/components/parameters/UploadId'
+        - name: n
+          in: path
+          required: true
+          description: 1-based part number, from 1 to totalParts.
+          schema:
+            type: integer
+            minimum: 1
+        - $ref: '#/components/parameters/ChunkSha256'
+        - $ref: '#/components/parameters/RawSha256'
+        - $ref: '#/components/parameters/Compression'
+        - $ref: '#/components/parameters/RawSize'
+        - $ref: '#/components/parameters/ClientId'
+        - $ref: '#/components/parameters/ClientPlatform'
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: Chunk verified and persisted to staging
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PartReceipt'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/Backpressure'
+
+  /uploads/{id}/status:
+    get:
+      tags: [uploads]
+      summary: Retrieve confirmed and missing parts for resumability
+      parameters:
+        - $ref: '#/components/parameters/UploadId'
+      responses:
+        '200':
+          description: Current session state and part bitmap
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadSession'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /uploads/{id}/complete:
+    post:
+      tags: [uploads]
+      summary: Trigger streaming decompression, reassembly, SHA-256 check, and staging cleanup
+      parameters:
+        - $ref: '#/components/parameters/UploadId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                fileSha256:
+                  type: [string, 'null']
+                  pattern: '^[0-9a-f]{64}$'
+                  description: |
+                    Expected SHA-256 of the original file. Sent by clients that
+                    compute the global digest incrementally during the transfer.
+                    When present it overrides the value given in /uploads/init.
+                notify:
+                  type: boolean
+                  default: true
+                  description: Send email/Telegram notifications on completion or failure.
+      responses:
+        '202':
+          description: Assembly job queued in background worker
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [uploadId, status, statusUrl]
+                properties:
+                  uploadId:
+                    type: string
+                    format: uuid
+                  status:
+                    type: string
+                    const: ASSEMBLING
+                  statusUrl:
+                    type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Short-lived access token issued by /auth/login or /auth/refresh.
+
+  parameters:
+    UploadId:
+      name: id
+      in: path
+      required: true
+      description: Upload session identifier (UUID v4).
+      schema:
+        type: string
+        format: uuid
+    VaultSlug:
+      name: X-Vault-Slug
+      in: header
+      required: false
+      description: Target vault slug. Defaults to the first vault allowed by the token.
+      schema:
+        type: string
+    ClientId:
+      name: X-Client-Id
+      in: header
+      required: false
+      description: UUID identifying the client instance (dashboard only).
+      schema:
+        type: string
+    ClientPlatform:
+      name: X-Client-Platform
+      in: header
+      required: false
+      description: Sender implementation, for dashboard display.
+      schema:
+        type: string
+        examples: [windows-dotnet, linux-python]
+    ChunkSha256:
+      name: X-Chunk-Sha256
+      in: header
+      required: true
+      description: SHA-256 (lowercase hex) of the transferred body.
+      schema:
+        type: string
+        pattern: '^[0-9a-f]{64}$'
+    RawSha256:
+      name: X-Raw-Sha256
+      in: header
+      required: false
+      description: SHA-256 (lowercase hex) of the uncompressed chunk.
+      schema:
+        type: string
+        pattern: '^[0-9a-f]{64}$'
+    Compression:
+      name: X-Compression
+      in: header
+      required: true
+      description: Compression method applied to the chunk before transfer.
+      schema:
+        type: string
+        enum: [zstd, none]
+    RawSize:
+      name: X-Raw-Size
+      in: header
+      required: true
+      description: Uncompressed chunk size in bytes.
+      schema:
+        type: integer
+        minimum: 0
+
+  schemas:
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+          writeOnly: true
+
+    TokenPair:
+      type: object
+      required: [tokenType, accessToken, refreshToken, expiresIn, user, vaults]
+      properties:
+        tokenType:
+          type: string
+          const: Bearer
+        accessToken:
+          type: string
+          description: Short-lived JWT (HS256).
+        refreshToken:
+          type: string
+          description: Opaque single-use refresh token; only its hash is stored server side.
+        expiresIn:
+          type: integer
+          description: Access token lifetime in seconds.
+          examples: [1200]
+        user:
+          type: object
+          required: [email]
+          properties:
+            email:
+              type: string
+              format: email
+            displayName:
+              type: [string, 'null']
+        vaults:
+          type: array
+          description: Vault slugs the token is allowed to write to.
+          items:
+            type: string
+
+    InitRequest:
+      type: object
+      required: [fileName, totalBytes, chunkSize, totalParts]
+      properties:
+        fileName:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: Base name only; no directory separators.
+        totalBytes:
+          type: integer
+          minimum: 1
+        chunkSize:
+          type: integer
+          description: Chunk size in bytes; 4 MiB to 32 MiB.
+          minimum: 4194304
+          maximum: 33554432
+        totalParts:
+          type: integer
+          minimum: 1
+          description: Must equal ceil(totalBytes / chunkSize).
+        fileSha256:
+          type: [string, 'null']
+          pattern: '^[0-9a-f]{64}$'
+          description: Expected SHA-256 of the original file; null when computed incrementally during transfer.
+        compression:
+          type: string
+          enum: [auto, none]
+          default: auto
+
+    UploadSession:
+      type: object
+      required: [uploadId, status, vaultSlug, fileName, totalBytes, chunkSize, totalParts]
+      properties:
+        uploadId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [INIT, UPLOADING, ASSEMBLING, READY, FAILED, EXPIRED]
+        vaultSlug:
+          type: string
+        fileName:
+          type: string
+        totalBytes:
+          type: integer
+        chunkSize:
+          type: integer
+        totalParts:
+          type: integer
+        receivedParts:
+          type: array
+          items:
+            type: integer
+        missingParts:
+          type: array
+          description: Truncated to the first 100 entries.
+          items:
+            type: integer
+        bytesReceived:
+          type: integer
+        startedAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: [string, 'null']
+          format: date-time
+        vaultPath:
+          type: [string, 'null']
+          description: Final path inside the vault once the file is verified.
+        finalSha256:
+          type: [string, 'null']
+        error:
+          type: [object, 'null']
+          description: Last error, as { code, message, details }.
+          additionalProperties: true
+
+    PartReceipt:
+      type: object
+      required: [partNumber, compressedSize, rawSize, sha256, compression, receivedParts, totalParts, status]
+      properties:
+        partNumber:
+          type: integer
+        compressedSize:
+          type: integer
+        rawSize:
+          type: integer
+        sha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        compression:
+          type: string
+          enum: [zstd, none]
+        receivedParts:
+          type: integer
+        totalParts:
+          type: integer
+        status:
+          type: string
+          enum: [INIT, UPLOADING, ASSEMBLING, READY, FAILED, EXPIRED]
+
+    ErrorBody:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              examples: [chunk_hash_mismatch, invalid_manifest, incomplete_upload]
+            message:
+              type: string
+            details:
+              type: object
+              additionalProperties: true
+
+  responses:
+    BadRequest:
+      description: Malformed request or manifest inconsistency
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+    Unauthorized:
+      description: Missing, invalid or expired access token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+    Forbidden:
+      description: Token is not allowed to write to the requested vault
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+    NotFound:
+      description: Unknown or expired upload session
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+    Conflict:
+      description: Part already stored with different content, or incomplete upload
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+    QuotaExceeded:
+      description: Vault quota exceeded or insufficient disk space
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+    Backpressure:
+      description: Server disk backpressure active; honor Retry-After
+      headers:
+        Retry-After:
+          description: Seconds to wait before retrying.
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
