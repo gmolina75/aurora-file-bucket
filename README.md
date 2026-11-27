@@ -40,7 +40,7 @@ dotnet run --project client-dotnet -- \
 - **Token rotativo:** JWT efímero de 20 minutos + refresh token de un solo uso.
 - **Aislamiento por bóvedas:** cada proyecto o cliente en su propia bóveda con cuota configurada.
 
-## Desarrollo
+## Desarrollo y pruebas
 
 ```bash
 # .NET
@@ -53,6 +53,39 @@ python -m pytest client-python/tests -q
 
 # End-to-end (prueba real con servidor + cliente + archivo)
 python scripts/e2e.py
+```
+
+## Instalación del servidor
+
+### Opción 1: Archivo publicado (recomendado)
+1. Descarga `AuroraFileBucket.Server-win-x64.zip` desde `https://github.com/gmolina75/aurora-file-bucket/releases`
+2. Extrae en `C:\aurora-server\`
+3. Crea `appsettings.Local.json` en esa carpeta:
+```json
+{
+  "AuroraStorage": {
+    "StagingRoot": "C:\\aurora-staging",
+    "VaultsRoot": "C:\\aurora-vaults",
+    "DatabasePath": "aurora.db"
+  },
+  "Auth": {
+    "JwtSigningKey": "TU_CLAVE_SECRETA",
+    "Users": [{
+      "email": "tu@email.com",
+      "password": "tu_contrasena",
+      "displayName": "Tu Nombre",
+      "vaults": ["default"]
+    }]
+  }
+}
+```
+4. Ejecuta: `AuroraFileBucket.Server.exe`
+
+### Opción 2: Compilar desde código
+```bash
+git clone https://github.com/gmolina75/aurora-file-bucket.git
+cd aurora-file-bucket
+dotnet publish server-dotnet/AuroraFileBucket.Server.csproj -c Release -r win-x64
 ```
 
 ## Documentación
