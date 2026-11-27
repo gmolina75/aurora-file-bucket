@@ -1,0 +1,7 @@
+# Local runtime state created by the zero-configuration fallback (contentRoot/data).
+data/
+
+# Local database files (defensive: the repo root .gitignore already covers *.db).
+*.db
+*.db-shm
+*.db-wal

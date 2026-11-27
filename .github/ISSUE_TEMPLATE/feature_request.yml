@@ -1,0 +1,44 @@
+name: Feature request
+description: Propose a capability for the receiver, the clients, or the protocol.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is missing today? What breaks, and for whom?
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: protocolImpact
+    attributes:
+      label: Protocol impact
+      description: >
+        Does this change the wire protocol, the chunk headers, the manifest, or the local
+        resume schema? If yes, list every component that must change together
+        (`server-dotnet/`, `client-dotnet/`, `client-python/`, `contracts/openapi.yaml`,
+        `docs/PROTOCOL.md`).
+      render: text
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Receiver (`server-dotnet/`)
+        - .NET client (`client-dotnet/`)
+        - Python client (`client-python/`)
+        - Protocol / contract
+        - Infrastructure / CI
+    validations:
+      required: true

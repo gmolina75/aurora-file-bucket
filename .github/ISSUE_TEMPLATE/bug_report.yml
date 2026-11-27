@@ -1,0 +1,73 @@
+name: Bug report
+description: Report a defect in the receiver, a client, or the protocol implementation.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this. Please do **not** use this form for
+        security vulnerabilities — follow `SECURITY.md` instead.
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Receiver (`server-dotnet/`)
+        - .NET client (`client-dotnet/`)
+        - Python client (`client-python/`)
+        - Protocol / contract (`contracts/`, `docs/PROTOCOL.md`)
+        - Build, CI or packaging
+        - Landing page / docs
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Tag, commit SHA, or client version.
+      placeholder: v0.1.0
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Receiver OS and IIS/ASP.NET version, client OS and runtime version.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Exact commands and configuration.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: Include the error body (`error.code`) and relevant logs — never paste chunk payloads.
+      render: text
+    validations:
+      required: true
+
+  - type: input
+    id: fileSize
+    attributes:
+      label: File size and chunk size used
+      placeholder: 48 MiB file, 16 MiB chunks
